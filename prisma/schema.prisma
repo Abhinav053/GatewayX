@@ -1,0 +1,270 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PaymentStatus {
+  CREATED
+  PROCESSING
+  SUCCESS
+  FAILED
+  TIMEOUT
+  PENDING_VERIFICATION
+}
+
+enum AttemptStatus {
+  SUCCESS
+  FAILED
+  TIMEOUT
+  PENDING
+}
+
+enum GatewayCode {
+  CASHFREE
+  RAZORPAY
+  STRIPE
+}
+
+enum PaymentMethod {
+  CARD
+  UPI
+  NET_BANKING
+  WALLET
+}
+
+enum FailureCategory {
+  PAYMENT_DECLINED
+  NETWORK_ERROR
+  PROVIDER_ERROR
+  TIMEOUT
+  VALIDATION_ERROR
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+enum KafkaTopic {
+  payment_attempted @map("payment.attempted")
+  payment_completed @map("payment.completed")
+  payment_failed    @map("payment.failed")
+  payment_timeout   @map("payment.timeout")
+}
+
+enum WebhookStatus {
+  PENDING
+  DELIVERED
+  FAILED
+}
+
+enum ExperimentStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+}
+
+enum ExperimentVariant {
+  CONTROL
+  TREATMENT
+}
+
+model Merchant {
+  id                   String                 @id @default(uuid()) @db.Uuid
+  name                 String
+  apiKeyHash           String                 @unique
+  webhookUrl           String?
+  gatewayPreference    GatewayCode[]          @default([])
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  payments             Payment[]
+  retryPolicy          RetryPolicy?
+  experimentAssignments ExperimentAssignment[]
+
+  @@index([name])
+}
+
+model Payment {
+  id                String          @id @default(uuid()) @db.Uuid
+  merchantId        String          @db.Uuid
+  experimentId      String?         @db.Uuid
+  customerId        String
+  idempotencyKey    String
+  amount            Decimal         @db.Decimal(18, 2)
+  currency          String          @default("INR") @db.VarChar(3)
+  method            PaymentMethod
+  status            PaymentStatus   @default(CREATED)
+  providerReference String?
+  finalGateway      GatewayCode?
+  requestPayload    Json
+  responsePayload   Json?
+  correlationId     String
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  merchant          Merchant        @relation(fields: [merchantId], references: [id], onDelete: Restrict)
+  experiment        Experiment?     @relation(fields: [experimentId], references: [id], onDelete: SetNull)
+  attempts          PaymentAttempt[]
+  routingDecision   RoutingDecision?
+  outboxEvents      OutboxEvent[]
+  webhookDeliveries WebhookDelivery[]
+
+  @@unique([merchantId, idempotencyKey])
+  @@index([merchantId])
+  @@index([customerId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Gateway {
+  id          String           @id @default(uuid()) @db.Uuid
+  code        GatewayCode      @unique
+  enabled     Boolean          @default(true)
+  successRate Decimal          @default(0.90) @db.Decimal(5, 4)
+  failureRate Decimal          @default(0.08) @db.Decimal(5, 4)
+  timeoutRate Decimal          @default(0.02) @db.Decimal(5, 4)
+  latencyMs   Int              @default(250)
+  methods     PaymentMethod[]  @default([])
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  attempts    PaymentAttempt[]
+  metrics     GatewayMetric[]
+}
+
+model PaymentAttempt {
+  id                String          @id @default(uuid()) @db.Uuid
+  paymentId         String          @db.Uuid
+  gatewayId         String          @db.Uuid
+  attemptNumber     Int
+  status            AttemptStatus
+  failureCategory   FailureCategory?
+  providerReference String?
+  errorCode         String?
+  errorMessage      String?
+  latencyMs         Int
+  requestPayload    Json?
+  responsePayload   Json?
+  createdAt         DateTime        @default(now())
+  payment           Payment         @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  gateway           Gateway         @relation(fields: [gatewayId], references: [id], onDelete: Restrict)
+
+  @@unique([paymentId, attemptNumber])
+  @@index([paymentId])
+  @@index([gatewayId])
+  @@index([createdAt])
+}
+
+model RetryPolicy {
+  id                 String            @id @default(uuid()) @db.Uuid
+  merchantId         String            @unique @db.Uuid
+  maxAttempts        Int               @default(3)
+  initialBackoffMs   Int               @default(250)
+  maxBackoffMs       Int               @default(2000)
+  retryableFailures  FailureCategory[] @default([NETWORK_ERROR, PROVIDER_ERROR, TIMEOUT])
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  merchant           Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+}
+
+model RoutingDecision {
+  id               String      @id @default(uuid()) @db.Uuid
+  paymentId        String      @unique @db.Uuid
+  selectedGateway  GatewayCode?
+  rankedGateways   Json
+  scoreBreakdown   Json
+  experimentVariant ExperimentVariant?
+  createdAt        DateTime    @default(now())
+  payment          Payment     @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+}
+
+model OutboxEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  paymentId     String       @db.Uuid
+  topic         KafkaTopic
+  aggregateType String
+  aggregateId   String
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  attempts      Int          @default(0)
+  publishedAt   DateTime?
+  lastError     String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  payment       Payment      @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([status, createdAt])
+}
+
+model WebhookDelivery {
+  id          String        @id @default(uuid()) @db.Uuid
+  paymentId   String        @db.Uuid
+  targetUrl   String
+  payload     Json
+  status      WebhookStatus @default(PENDING)
+  attempts    Int           @default(0)
+  deliveredAt DateTime?
+  lastError   String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  payment     Payment       @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+}
+
+model Experiment {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  name                String
+  status              ExperimentStatus        @default(DRAFT)
+  trafficPercent      Int                     @default(50)
+  controlGatewayOrder GatewayCode[]
+  treatmentGatewayOrder GatewayCode[]
+  controlAlpha        Int                     @default(1)
+  controlBeta         Int                     @default(1)
+  treatmentAlpha      Int                     @default(1)
+  treatmentBeta       Int                     @default(1)
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  assignments         ExperimentAssignment[]
+  payments            Payment[]
+
+  @@index([status])
+}
+
+model ExperimentAssignment {
+  id           String            @id @default(uuid()) @db.Uuid
+  experimentId String            @db.Uuid
+  merchantId   String            @db.Uuid
+  customerId   String
+  variant      ExperimentVariant
+  createdAt    DateTime          @default(now())
+  experiment   Experiment        @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  merchant     Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@unique([experimentId, customerId])
+  @@index([merchantId, customerId])
+}
+
+model GatewayMetric {
+  id             String        @id @default(uuid()) @db.Uuid
+  gatewayId      String        @db.Uuid
+  method         PaymentMethod
+  bucketStart    DateTime
+  totalAttempts  Int           @default(0)
+  successes      Int           @default(0)
+  failures       Int           @default(0)
+  timeouts       Int           @default(0)
+  totalLatencyMs BigInt        @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  gateway        Gateway       @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+
+  @@unique([gatewayId, method, bucketStart])
+  @@index([gatewayId, bucketStart])
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@payment-orchestrator/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "exports": {
+    "./config": "./config/index.js",
+    "./config/readiness": "./config/readiness.js",
+    "./logger": "./logger/index.js",
+    "./redis": "./redis/index.js",
+    "./prisma": "./prisma.js"
+  },
+  "dependencies": {
+    "ioredis": "^5.7.0",
+    "pino": "^9.7.0",
+    "pino-http": "^10.5.0"
+  }
+}
