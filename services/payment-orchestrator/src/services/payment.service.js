@@ -11,8 +11,9 @@ function serializePayment(payment) {
 }
 
 class PaymentService {
-  constructor({ paymentRepository = new PaymentRepository() } = {}) {
+  constructor({ paymentRepository = new PaymentRepository(), executionService } = {}) {
     this.paymentRepository = paymentRepository;
+    this.executionService = executionService;
   }
 
   async createPayment({ merchant, payload, correlationId }) {
@@ -23,12 +24,14 @@ class PaymentService {
       amount: input.amount,
       currency: input.currency,
       method: input.method,
-      status: PAYMENT_STATUSES.CREATED,
+      status: this.executionService ? PAYMENT_STATUSES.PROCESSING : PAYMENT_STATUSES.CREATED,
       requestPayload: { metadata: input.metadata || {} },
       correlationId
     });
 
-    return serializePayment(payment);
+    if (!this.executionService) return serializePayment(payment);
+    const result = await this.executionService.execute({ payment, merchant });
+    return serializePayment(await this.paymentRepository.updateAfterExecution(payment.id, result));
   }
 
   async getPayment({ id, merchantId }) {

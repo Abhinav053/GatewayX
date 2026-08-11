@@ -1,13 +1,12 @@
-function createPaymentController(paymentService) {
+function createPaymentController(paymentService, idempotencyService) {
   return {
     create: async (request, response, next) => {
       try {
-        const payment = await paymentService.createPayment({
-          merchant: request.merchant,
-          payload: request.body,
-          correlationId: request.id
+        const result = await idempotencyService.execute({
+          merchantId: request.merchant.id, key: request.idempotencyKey, payload: request.body,
+          operation: () => paymentService.createPayment({ merchant: request.merchant, payload: request.body, correlationId: request.id })
         });
-        response.status(201).json({ data: payment });
+        response.status(result.replayed ? 200 : 201).json({ data: result.response, idempotentReplay: result.replayed });
       } catch (error) {
         next(error);
       }
