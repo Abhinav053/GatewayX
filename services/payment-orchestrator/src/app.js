@@ -6,8 +6,10 @@ const { MerchantRepository } = require('./repositories/merchant.repository');
 const { PaymentService } = require('./services/payment.service');
 const { createPaymentRouter } = require('./routes/payment.routes');
 const { errorHandler } = require('./middlewares/error-handler');
+const { GatewayService } = require('./services/gateway.service');
+const { createGatewayRouter } = require('./routes/gateway.routes');
 
-function createApp({ merchantRepository = new MerchantRepository(), paymentService = new PaymentService() } = {}) {
+function createApp({ merchantRepository = new MerchantRepository(), paymentService = new PaymentService(), gatewayService = new GatewayService() } = {}) {
   const config = getConfig('payment-orchestrator');
   const logger = createLogger(config.serviceName);
   const app = express();
@@ -21,6 +23,7 @@ function createApp({ merchantRepository = new MerchantRepository(), paymentServi
 
   app.get('/ops/readiness', createReadinessHandler({ logger, redisUrl: config.redisUrl }));
   app.use('/payments', createPaymentRouter({ merchantRepository, paymentService }));
+  app.use('/gateways', createGatewayRouter({ gatewayService }));
   app.use(errorHandler);
 
   return app;
